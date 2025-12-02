@@ -33,3 +33,7 @@ spring:
           auth: true
           starttls:
             enable: true
+logging:
+  level:
+    iuh.student.www.service.GeminiAIChatbotService: DEBUG
+    okhttp3.OkHttpClient: DEBUG
