@@ -57,6 +57,7 @@
         p, span, div, label {
             font-family: 'Nunito', sans-serif;
             font-weight: 500;
+            color: #262a2f;
         }
 
         .btn {
