@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?> 
+ <trees>
+     <tree path="/src/main/java/iuh/student/www/controller/admin"/>
+    <tree path="/src/main/java/iuh/student/www/controller" title="Điều khiển request" extension="" presentableText=""
+          tooltipTitle=""/>
+     <tree path="/src/main/java/iuh/student/www/dto" title="Đóng gói dữ liệu"/>
+     <tree path="/src/main/java/iuh/student/www/security" title="Bảo mật & đăng nhập"/>
+     <tree path="/src/main/java/iuh/student/www/service" title="Xử lý logic"/>
+     <tree path="/src/main/java/iuh/student/www/repository" title="Truy vấn database"/>
+     <tree path="/src/main/java/iuh/student/www/entity" title="Ánh xạ bảng DB"/>
+     <tree path="/src/main/java/iuh/student/www/model" title="model quản lý giỏ hàng"/>
+     <tree path="/src/main/java/iuh/student/www/config" icon=""/>
+ </trees>
