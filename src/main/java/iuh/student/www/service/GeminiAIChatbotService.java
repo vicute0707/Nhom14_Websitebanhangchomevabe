@@ -1,11 +1,16 @@
 package iuh.student.www.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.github.benmanes.caffeine.cache.Cache;
+import com.github.benmanes.caffeine.cache.Caffeine;
 import iuh.student.www.dto.ChatbotRequest;
 import iuh.student.www.dto.ChatbotResponse;
+import iuh.student.www.dto.ChatHistoryDTO;
+import iuh.student.www.entity.Feedback;
 import iuh.student.www.entity.Order;
 import iuh.student.www.entity.Product;
 import iuh.student.www.entity.User;
+import iuh.student.www.repository.FeedbackRepository;
 import iuh.student.www.repository.OrderRepository;
 import iuh.student.www.repository.ProductRepository;
 import iuh.student.www.repository.UserRepository;
@@ -16,13 +21,12 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 import java.io.IOException;
+import java.time.LocalDateTime;
 import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
-/**
- * Gemini AI Chatbot Service
- * Sử dụng Gemini 2.0 Flash để quản lý thông tin người dùng, đơn hàng
- */
 @Service
 @RequiredArgsConstructor
 @Slf4j
@@ -31,44 +35,49 @@ public class GeminiAIChatbotService {
     private final UserRepository userRepository;
     private final OrderRepository orderRepository;
     private final ProductRepository productRepository;
+    private final FeedbackRepository feedbackRepository;
     private final ObjectMapper objectMapper;
 
-    @Value("${gemini.api.key:}")
+    @Value("${gemini.api.key}")
     private String geminiApiKey;
-
     @Value("${gemini.model:gemini-2.0-flash-exp}")
     private String geminiModel;
-
-    private static final String GEMINI_API_URL = "https://generativelanguage.googleapis.com/v1beta/models/%s:generateContent?key=%s";
-
+    private static final String GEMINI_URL =
+            "https://generativelanguage.googleapis.com/v1beta/models/%s:generateContent?key=%s";
     private final OkHttpClient httpClient = new OkHttpClient();
 
-    /**
-     * Xử lý chat request
-     */
-    public ChatbotResponse chat(ChatbotRequest request) {
+    private final Cache<Long, String> contextCache = Caffeine.newBuilder()
+            .expireAfterWrite(60, TimeUnit.SECONDS)
+            .maximumSize(1_000)
+            .build();
+
+    private final Map<String, Deque<ChatHistoryDTO>> historyMap = new ConcurrentHashMap<>();
+
+    public ChatbotResponse chat(ChatbotRequest request, Long userId) {
         try {
-            log.info("Processing chatbot request - Message: {}, UserId: {}", request.getMessage(), request.getUserId());
+            String context = contextCache.get(userId,
+                    uid -> buildContextData(uid, request.getContextType()));
 
-            // Lấy context data dựa trên userId
-            String contextData = buildContextData(request.getUserId(), request.getContextType());
+            String history = formatHistory(request.getSessionId());
 
-            // Tạo prompt cho Gemini
-            String prompt = buildPrompt(request.getMessage(), contextData);
+            String prompt = buildPrompt(request.getMessage(), context, history);
 
-            // Gọi Gemini API
-            String aiResponse = callGeminiAPI(prompt);
+            String aiReply = callGeminiAPI(prompt);
+            aiReply = factCheck(aiReply);
 
-            // Parse và format response
+            saveHistory(request.getSessionId(), "user", request.getMessage());
+            saveHistory(request.getSessionId(), "assistant", aiReply);
+
             return ChatbotResponse.builder()
-                    .message(aiResponse)
-                    .sessionId(request.getSessionId() != null ? request.getSessionId() : UUID.randomUUID().toString())
+                    .message(aiReply)
+                    .sessionId(request.getSessionId())
                     .success(true)
                     .suggestedActions(getSuggestedActions(request.getMessage()))
+                    .relatedData(userId != null ? Map.of("userId", userId) : null)
                     .build();
 
         } catch (Exception e) {
-            log.error("Error processing chatbot request", e);
+            log.error("❌ Chatbot error", e);
             return ChatbotResponse.builder()
                     .message("Xin lỗi, tôi đang gặp sự cố. Vui lòng thử lại sau.")
                     .success(false)
@@ -77,200 +86,138 @@ public class GeminiAIChatbotService {
         }
     }
 
-    /**
-     * Build context data cho AI
-     */
+    // ---------- Context ----------
     private String buildContextData(Long userId, String contextType) {
-        StringBuilder context = new StringBuilder();
-
+        StringBuilder sb = new StringBuilder();
         if (userId != null) {
-            // Lấy thông tin user
-            Optional<User> userOpt = userRepository.findById(userId);
-            if (userOpt.isPresent()) {
-                User user = userOpt.get();
-                context.append("## THÔNG TIN NGƯỜI DÙNG\n");
-                context.append("- Tên: ").append(user.getFullName()).append("\n");
-                context.append("- Email: ").append(user.getEmail()).append("\n");
-                context.append("- Vai trò: ").append(user.getRole()).append("\n\n");
+            User u = userRepository.findById(userId).orElse(null);
+            if (u != null) {
+                sb.append("## USER\n");
+                sb.append("- Name: ").append(u.getFullName()).append("\n");
+                sb.append("- Email: ").append(u.getEmail()).append("\n");
+                sb.append("- Role: ").append(u.getRole()).append("\n");
 
-                // Lấy đơn hàng của user
-                List<Order> orders = orderRepository.findByUserIdOrderByOrderDateDesc(user.getId());
+                List<Order> orders = orderRepository.findByUserIdOrderByOrderDateDesc(u.getId())
+                        .stream().limit(5).toList();
                 if (!orders.isEmpty()) {
-                    context.append("## ĐƠN HÀNG\n");
-                    context.append("Tổng số đơn hàng: ").append(orders.size()).append("\n");
-
-                    // Lấy 5 đơn hàng gần nhất
-                    orders.stream().limit(5).forEach(order -> {
-                        context.append("\n### Đơn hàng #").append(order.getId()).append("\n");
-                        context.append("- Ngày đặt: ").append(order.getOrderDate()).append("\n");
-                        context.append("- Trạng thái: ").append(order.getStatus()).append("\n");
-                        context.append("- Tổng tiền: ").append(String.format("%,d", order.getTotalAmount().intValue())).append("₫\n");
-                        context.append("- Phương thức thanh toán: ").append(order.getPaymentMethod() != null ? order.getPaymentMethod() : "COD").append("\n");
-                        context.append("- Sản phẩm: ").append(order.getOrderDetails().stream()
-                                .map(detail -> detail.getProduct().getName() + " (x" + detail.getQuantity() + ")")
-                                .collect(Collectors.joining(", "))).append("\n");
-                    });
+                    sb.append("## LAST 5 ORDERS\n");
+                    orders.forEach(o -> sb.append("- Order #")
+                            .append(o.getId()).append(" | ")
+                            .append(o.getStatus()).append(" | ")
+                            .append(o.getTotalAmount()).append("₫\n"));
                 }
             }
         }
-
-        // Thêm thông tin sản phẩm nếu contextType là "product"
         if ("product".equals(contextType)) {
-            List<Product> products = productRepository.findAll();
-            context.append("\n## SẢN PHẨM CÓ SẴN\n");
-            products.stream().limit(10).forEach(product -> {
-                context.append("- ").append(product.getName())
-                        .append(" (").append(String.format("%,d", product.getPrice().intValue())).append("₫")
-                        .append(") - Còn: ").append(product.getStockQuantity()).append("\n");
-            });
+            List<Product> pros = productRepository.findByActiveTrue()
+                    .stream().limit(10).toList();
+            sb.append("## TOP 10 PRODUCTS\n");
+            pros.forEach(p -> sb.append("- ")
+                    .append(p.getName()).append(" | ")
+                    .append(p.getPrice()).append("₫ | ")
+                    .append("Stock: ").append(p.getStockQuantity()).append("\n"));
         }
-
-        return context.toString();
+        return sb.toString();
     }
 
-    /**
-     * Build prompt cho Gemini AI
-     */
-    private String buildPrompt(String userMessage, String contextData) {
+    // ---------- Prompt ----------
+    private String buildPrompt(String userMessage, String context, String history) {
+        String fewShot = """
+                Ví dụ:
+                H: Tôi muốn xem đơn hàng gần nhất
+                A: Đơn hàng #123456 của bạn đã được giao vào 01/12/2025 ✅
+                H: Còn hàng không?
+                A: Sản phẩm "Áo cotton trẻ em size M" còn 25 chiếc 🍼
+                """;
         return String.format("""
-                Bạn là trợ lý AI thông minh của Shop Mẹ và Bé - một cửa hàng bán đồ cho mẹ và bé.
-
-                NHIỆM VỤ:
-                - Trả lời câu hỏi của khách hàng về đơn hàng, sản phẩm, thông tin cá nhân
-                - Cung cấp thông tin chính xác dựa trên dữ liệu
-                - Gợi ý sản phẩm phù hợp
-                - Hướng dẫn khách hàng thao tác trên website
-                - Giải đáp thắc mắc về chính sách, vận chuyển, thanh toán
-
-                QUY TẮC:
-                - Trả lời bằng tiếng Việt thân thiện, lịch sự
-                - Nếu không có thông tin, nói rõ và gợi ý liên hệ support
-                - Không tự ý tạo thông tin không có trong dữ liệu
-                - Sử dụng emoji phù hợp để thân thiện hơn (🍼, 👶, 💕, ✅, 📦)
-                - Trả lời ngắn gọn, dễ hiểu
-
-                DỮ LIỆU NGƯỜI DÙNG:
                 %s
-
+                LỊCH SỬ TRÒ CHUYỆN:
+                %s
+                DỮ LIỆU:
+                %s
                 CÂU HỎI: %s
-
                 TRẢ LỜI:
-                """, contextData, userMessage);
+                """, fewShot, history, context, userMessage);
     }
 
-    /**
-     * Gọi Gemini API
-     */
+    // ---------- Gemini call ----------
     private String callGeminiAPI(String prompt) throws IOException {
-        String url = String.format(GEMINI_API_URL, geminiModel, geminiApiKey);
-
-        Map<String, Object> requestBody = buildRequestBody(prompt);
-        String jsonBody = objectMapper.writeValueAsString(requestBody);
-
-        Request request = new Request.Builder()
+        String url = String.format(GEMINI_URL, geminiModel, geminiApiKey);
+        Map<String, Object> body = Map.of(
+                "contents", List.of(Map.of("parts", List.of(Map.of("text", prompt)))),
+                "generationConfig", Map.of("temperature", 0.7, "maxOutputTokens", 1024)
+        );
+        Request req = new Request.Builder()
                 .url(url)
-                .post(RequestBody.create(jsonBody, MediaType.get("application/json")))
+                .post(RequestBody.create(objectMapper.writeValueAsBytes(body),
+                        MediaType.get("application/json")))
                 .build();
+        try (Response res = httpClient.newCall(req).execute()) {
+            if (!res.isSuccessful())
+                throw new IOException("Gemini error " + res.code());
+            String json = res.body().string();
+            return objectMapper.readTree(json)
+                    .at("/candidates/0/content/parts/0/text")
+                    .asText("Xin lỗi, tôi không thể trả lời.");
+        }
+    }
 
-        int maxRetries = 3;
-        int retryCount = 0;
-        long backoffMillis = 1000; // bắt đầu từ 1 giây
+    // ---------- Fact-check ----------
+    private String factCheck(String answer) {
+        // Bắt tên trong ngoặc kép
+        java.util.regex.Pattern p = java.util.regex.Pattern.compile("\"([^\"]*)\"");
+        java.util.regex.Matcher m = p.matcher(answer);
+        StringBuffer sb = new StringBuffer();
 
-        while (retryCount < maxRetries) {
-            try (Response response = httpClient.newCall(request).execute()) {
-                if (response.isSuccessful()) {
-                    String responseBody = response.body().string();
-                    return extractTextFromResponse(responseBody);
-                } else if (response.code() == 429) {
-                    retryCount++;
-                    log.warn("Gemini API returned 429 (Too Many Requests). Retry {}/{} in {} ms", retryCount, maxRetries, backoffMillis);
-                    try {
-                        Thread.sleep(backoffMillis);
-                    } catch (InterruptedException e) {
-                        Thread.currentThread().interrupt();
-                        throw new IOException("Retry interrupted", e);
-                    }
-                    backoffMillis *= 2; // exponential backoff
-                } else {
-                    String errorBody = response.body() != null ? response.body().string() : "Unknown error";
-                    log.error("Gemini API error: {} - {}", response.code(), errorBody);
-                    throw new IOException("Gemini API call failed: " + response.code());
-                }
+        while (m.find()) {
+            String name = m.group(1);
+            boolean exists = productRepository.searchAllProducts(name.toLowerCase()).size() > 0;
+            if (!exists) {
+                m.appendReplacement(sb, "\"" + name + " (không tồn tại)\"");
+            } else {
+                m.appendReplacement(sb, "\"" + name + "\"");
             }
         }
-
-        throw new IOException("Gemini API call failed after " + maxRetries + " retries due to rate limit (429).");
+        m.appendTail(sb);
+        return sb.toString();
     }
-    private Map<String, Object> buildRequestBody(String prompt) {
-        Map<String, Object> requestBody = new HashMap<>();
-        List<Map<String, Object>> contents = new ArrayList<>();
-        Map<String, Object> content = new HashMap<>();
-        List<Map<String, String>> parts = List.of(Map.of("text", prompt));
-        content.put("parts", parts);
-        contents.add(content);
-        requestBody.put("contents", contents);
-
-        requestBody.put("safetySettings", List.of(
-                Map.of("category", "HARM_CATEGORY_HARASSMENT", "threshold", "BLOCK_NONE"),
-                Map.of("category", "HARM_CATEGORY_HATE_SPEECH", "threshold", "BLOCK_NONE"),
-                Map.of("category", "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold", "BLOCK_NONE"),
-                Map.of("category", "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold", "BLOCK_NONE")
-        ));
-
-        requestBody.put("generationConfig", Map.of(
-                "temperature", 0.7,
-                "maxOutputTokens", 1024
-        ));
-
-        return requestBody;
+    // ---------- History ----------
+    private void saveHistory(String sessionId, String role, String content) {
+        historyMap.computeIfAbsent(sessionId, k -> new ArrayDeque<>())
+                .addLast(new ChatHistoryDTO(role, content));
+        if (historyMap.get(sessionId).size() > 7)
+            historyMap.get(sessionId).removeFirst();
     }
 
-    private String extractTextFromResponse(String responseBody) throws IOException {
-        Map<String, Object> responseMap = objectMapper.readValue(responseBody, Map.class);
-        List<Map<String, Object>> candidates = (List<Map<String, Object>>) responseMap.get("candidates");
-
-        if (candidates != null && !candidates.isEmpty()) {
-            Map<String, Object> candidate = candidates.get(0);
-            Map<String, Object> content = (Map<String, Object>) candidate.get("content");
-            List<Map<String, String>> parts = (List<Map<String, String>>) content.get("parts");
-
-            if (parts != null && !parts.isEmpty()) {
-                return parts.get(0).get("text");
-            }
-        }
-
-        return "Xin lỗi, tôi không thể tạo phản hồi lúc này.";
+    private String formatHistory(String sessionId) {
+        return historyMap.getOrDefault(sessionId, new ArrayDeque<>())
+                .stream()
+                .map(d -> d.role() + ": " + d.content())
+                .collect(Collectors.joining("\n"));
     }
 
-    /**
-     * Lấy suggested actions dựa trên tin nhắn
-     */
+    public List<Object> getHistory(String sessionId) {
+        return List.copyOf(historyMap.getOrDefault(sessionId, new ArrayDeque<>()));
+    }
+
+    // ---------- Feedback ----------
+    public void saveFeedback(String sessionId, String message, int rating) {
+        Feedback fb = new Feedback();
+        fb.setSessionId(sessionId);
+        fb.setMessage(message);
+        fb.setRating(rating);
+        fb.setCreatedAt(LocalDateTime.now());
+        feedbackRepository.save(fb);
+    }
+
+    // ---------- Suggested actions ----------
     private List<String> getSuggestedActions(String message) {
-        List<String> actions = new ArrayList<>();
-
-        String lowerMessage = message.toLowerCase();
-
-        if (lowerMessage.contains("đơn hàng") || lowerMessage.contains("order")) {
-            actions.add("Xem tất cả đơn hàng");
-            actions.add("Tra cứu đơn hàng");
-        }
-
-        if (lowerMessage.contains("sản phẩm") || lowerMessage.contains("product")) {
-            actions.add("Xem sản phẩm mới");
-            actions.add("Sản phẩm khuyến mãi");
-        }
-
-        if (lowerMessage.contains("thanh toán") || lowerMessage.contains("payment")) {
-            actions.add("Hướng dẫn thanh toán");
-            actions.add("Phương thức thanh toán");
-        }
-
-        if (actions.isEmpty()) {
-            actions.add("Xem đơn hàng");
-            actions.add("Xem sản phẩm");
-            actions.add("Liên hệ hỗ trợ");
-        }
-
-        return actions;
+        String m = message.toLowerCase();
+        List<String> out = new ArrayList<>();
+        if (m.contains("đơn")) out.add("Xem đơn hàng");
+        if (m.contains("sản phẩm")) out.add("Xem sản phẩm mới");
+        if (m.contains("thanh toán")) out.add("Hướng dẫn thanh toán");
+        if (out.isEmpty()) out.addAll(List.of("Xem đơn hàng", "Xem sản phẩm", "Liên hệ hỗ trợ"));
+        return out;
     }
 }
