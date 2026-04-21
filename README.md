@@ -46,12 +46,12 @@ spring.datasource.password=sapassword
 
 # Email (Gmail)
 spring.mail.username=nguyenthituongvi2023@gmail.com
-spring.mail.password=hkpw hzun lrnh xuxv
+spring.mail.password=
 
 # MoMo Payment (Test Environment)
-momo.partner-code=MOMO
-momo.access-key=F8BBA842ECF85
-momo.secret-key=K951B6PE1waDMi640xX08PD3vg6EkVlz
+momo.partner-code=
+momo.access-key=
+momo.secret-key=
 
 # App Base URL (Ngrok)
 app.base-url=https://presophomore-adjunctly-margery.ngrok-free.dev
