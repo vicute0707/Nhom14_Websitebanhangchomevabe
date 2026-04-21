@@ -1,6 +1,6 @@
 HELP.md
 target/
-.mvn/wrapper/maven-wrapper.jar
+!.mvn/wrapper/maven-wrapper.jar
 !**/src/main/**/target/
 !**/src/test/**/target/
 
@@ -31,3 +31,46 @@ build/
 
 ### VS Code ###
 .vscode/
+
+### SENSITIVE CONFIG ###
+src/main/resources/application.properties
+src/main/resources/application-*.properties
+src/main/resources/application.yml
+src/main/resources/application-*.yml
+!src/main/resources/application.properties.example
+!src/main/resources/application.yml.example
+
+### ENV FILES ###
+.env
+.env.local
+.env.*.local
+
+### LOGS ###
+*.log
+logs/
+spring.log
+
+### DATABASE FILES (H2, SQLite) ###
+data/
+*.db
+*.h2.db
+*.mv.db
+*.trace.db
+
+### UPLOAD / TEMP ###
+uploads/
+temp/
+tmp/
+*.tmp
+
+### OS FILES ###
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+### TEST RESULTS HTML (đã commit nhầm trước đó) ###
+Test Results - *.html
+
+### DOCS THỪA ###
+DirectoryV3.xml
+src/main/project-structure.txt

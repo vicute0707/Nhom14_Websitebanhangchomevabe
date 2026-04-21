@@ -1,0 +1,185 @@
+spring:
+  application:
+    name: ShopBabyandMomCute
+
+  # ==========================================
+  # DATABASE - MariaDB
+  # ==========================================
+  datasource:
+    url: jdbc:mariadb://localhost:3306/shop_me_va_be?createDatabaseIfNotExist=true&useUnicode=true&characterEncoding=UTF-8&serverTimezone=Asia/Ho_Chi_Minh
+    driver-class-name: org.mariadb.jdbc.Driver
+    username: YOUR_DB_USERNAME
+    password: YOUR_DB_PASSWORD
+    hikari:
+      maximum-pool-size: 10
+      minimum-idle: 5
+      connection-timeout: 20000
+      idle-timeout: 300000
+      max-lifetime: 1200000
+
+  # ==========================================
+  # JPA / HIBERNATE
+  # ==========================================
+  jpa:
+    hibernate:
+      ddl-auto: update           # update khi dev, validate khi production
+    show-sql: false
+    defer-datasource-initialization: true
+    properties:
+      hibernate:
+        format_sql: true
+        dialect: org.hibernate.dialect.MariaDBDialect
+        jdbc:
+          time_zone: Asia/Ho_Chi_Minh
+          batch_size: 20
+        order_inserts: true
+        order_updates: true
+
+  sql:
+    init:
+      mode: never
+      # Note: import data.sql thủ công:
+      # mysql -u root -p shop_me_va_be < src/main/resources/db/data.sql
+
+  # ==========================================
+  # JSP VIEWS
+  # ==========================================
+  mvc:
+    view:
+      prefix: /WEB-INF/views/
+      suffix: .jsp
+
+  # ==========================================
+  # EMAIL (Gmail SMTP)
+  # ==========================================
+  # Lấy App Password tại: https://myaccount.google.com/apppasswords
+  # (Cần bật 2-Step Verification trước)
+  mail:
+    host: smtp.gmail.com
+    port: 587
+    username: your-email@gmail.com
+    password: YOUR_GMAIL_APP_PASSWORD_16_CHARS
+    properties:
+      mail:
+        smtp:
+          auth: true
+          starttls:
+            enable: true
+          connectiontimeout: 5000
+          timeout: 5000
+          writetimeout: 5000
+
+  # ==========================================
+  # JACKSON / JSON
+  # ==========================================
+  jackson:
+    serialization:
+      write-dates-as-timestamps: false
+    time-zone: Asia/Ho_Chi_Minh
+
+  # ==========================================
+  # SECURITY
+  # ==========================================
+  security:
+    csrf:
+      cookie:
+        http-only: true
+        secure: false
+
+  # ==========================================
+  # STATIC RESOURCES
+  # ==========================================
+  web:
+    resources:
+      cache:
+        cachecontrol:
+          max-age: 3600
+
+# ==========================================
+# SERVER
+# ==========================================
+server:
+  port: 8080
+  servlet:
+    session:
+      timeout: 30m
+  compression:
+    enabled: true
+    mime-types: text/html,text/xml,text/plain,text/css,text/javascript,application/javascript,application/json
+  error:
+    include-message: always
+    include-binding-errors: always
+    include-stacktrace: on_param
+
+# ==========================================
+# APP CUSTOM CONFIG
+# ==========================================
+app:
+  # Local: http://localhost:8080
+  # Production: https://your-domain.com
+  # Ngrok (test webhook): https://your-subdomain.ngrok-free.dev
+  base-url: http://localhost:8080
+
+# ==========================================
+# MOMO PAYMENT GATEWAY
+# ==========================================
+# Test Environment - lấy key tại: https://business.momo.vn/
+momo:
+  endpoint: https://test-payment.momo.vn/v2/gateway/api/create
+  partner-code: YOUR_MOMO_PARTNER_CODE
+  access-key: YOUR_MOMO_ACCESS_KEY
+  secret-key: YOUR_MOMO_SECRET_KEY
+  redirect-url: ${app.base-url}/payment/momo/callback
+  ipn-url: ${app.base-url}/payment/momo/ipn
+  request-type: captureWallet
+
+# ==========================================
+# JWT
+# ==========================================
+# Secret tối thiểu 32 ký tự (256 bits)
+jwt:
+  secret: YOUR_JWT_SECRET_KEY_AT_LEAST_32_CHARACTERS_LONG_AND_RANDOM
+  expiration: 86400000   # 24h tính bằng millisecond
+
+# ==========================================
+# CLOUDINARY (Upload ảnh)
+# ==========================================
+# Đăng ký tại: https://cloudinary.com/
+cloudinary:
+  enabled: true
+  cloud-name: YOUR_CLOUDINARY_CLOUD_NAME
+  api-key: YOUR_CLOUDINARY_API_KEY
+  api-secret: YOUR_CLOUDINARY_API_SECRET
+
+# ==========================================
+# GEMINI AI CHATBOT
+# ==========================================
+# Lấy API key tại: https://aistudio.google.com/apikey
+gemini:
+  api:
+    key: YOUR_GEMINI_API_KEY
+  model: gemini-2.5-flash
+
+# ==========================================
+# LOGGING
+# ==========================================
+logging:
+  level:
+    root: INFO
+    iuh.student.www: DEBUG
+    org.springframework.security: DEBUG
+    org.springframework.web: DEBUG
+    org.hibernate.SQL: DEBUG
+    org.hibernate.type.descriptor.sql.BasicBinder: TRACE
+
+# ==========================================
+# ACTUATOR (Health Monitoring)
+# ==========================================
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics
+  endpoint:
+    health:
+      show-details: when-authorized
